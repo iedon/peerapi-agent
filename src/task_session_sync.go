@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -526,8 +527,14 @@ func validateSessionInputs(session *BgpSession) error {
 	if err := validateIPAddressIfGiven(session.IPv6); err != nil {
 		return err
 	}
+	if session.IPv6 != "" && strings.HasPrefix(strings.ToLower(session.IPv6), "fe80:") {
+		return fmt.Errorf("IPv6 ULA cannot be a link-local address")
+	}
 	if err := validateIPAddressIfGiven(session.IPv6LinkLocal); err != nil {
 		return err
+	}
+	if session.IPv6LinkLocal != "" && !strings.HasPrefix(strings.ToLower(session.IPv6LinkLocal), "fe80:") {
+		return fmt.Errorf("IPv6 link-local address must start with fe80")
 	}
 
 	// Validate endpoint
