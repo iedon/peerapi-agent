@@ -79,6 +79,7 @@
     "ifaceIpForwarding": true,
     "ifaceIp6Forwarding": true,
     "ifaceIp6AcceptRa": false,
+    "ifaceIp6AutoConfig": false,
     "ifaceRpFilter": 0,
     "ifaceAcceptLocal": true
   },

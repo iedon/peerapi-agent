@@ -347,6 +347,7 @@ func applySysctlSettings(ctx context.Context, interfaceName string) {
 		fmt.Sprintf("net.ipv4.conf.%s.forwarding", interfaceName):   {boolToStr(cfg.Sysctl.IfaceIPForwarding), "IPv4 forwarding"},
 		fmt.Sprintf("net.ipv6.conf.%s.forwarding", interfaceName):   {boolToStr(cfg.Sysctl.IfaceIP6Forwarding), "IPv6 forwarding"},
 		fmt.Sprintf("net.ipv6.conf.%s.accept_ra", interfaceName):    {boolToStr(cfg.Sysctl.IfaceIP6AcceptRA), "IPv6 Router Advertisement acceptance"},
+		fmt.Sprintf("net.ipv6.conf.%s.autoconf", interfaceName):     {boolToStr(cfg.Sysctl.IfaceIP6AutoConfig), "IPv6 autoconfiguration"},
 		fmt.Sprintf("net.ipv4.conf.%s.rp_filter", interfaceName):    {strconv.Itoa(cfg.Sysctl.IfaceRPFilter), "Reverse Path Filter"},
 		fmt.Sprintf("net.ipv4.conf.%s.accept_local", interfaceName): {boolToStr(cfg.Sysctl.IfaceAcceptLocal), "Accept local traffic"},
 	}

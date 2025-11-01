@@ -106,6 +106,7 @@ type sysctlConfig struct {
 	IfaceIPForwarding  bool   `json:"ifaceIpForwarding"`  // Enable IPv4 forwarding on interfaces
 	IfaceIP6Forwarding bool   `json:"ifaceIp6Forwarding"` // Enable IPv6 forwarding on interfaces
 	IfaceIP6AcceptRA   bool   `json:"ifaceIp6AcceptRa"`   // Accept Router Advertisements on interfaces
+	IfaceIP6AutoConfig bool   `json:"ifaceIp6AutoConfig"` // Enable IPv6 autoconfiguration on interfaces
 	IfaceRPFilter      int    `json:"ifaceRpFilter"`      // Reverse Path Filter setting (0=disabled, 1=strict, 2=loose)
 	IfaceAcceptLocal   bool   `json:"ifaceAcceptLocal"`   // Accept local traffic on interfaces(must be on for anycasting, eg. DN42 Anycast DNS)
 }
