@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +40,8 @@ var (
 
 	// Hostname: RFC 1123 compliant
 	hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+
+	syncSessionsRunning atomic.Bool
 )
 
 const (
@@ -405,6 +408,11 @@ func mainSessionTask(ctx context.Context, wg *sync.WaitGroup) {
 
 // syncSessions synchronizes local sessions with the PeerAPI server
 func syncSessions() {
+	if !syncSessionsRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer syncSessionsRunning.Store(false)
+
 	remoteSessions, err := getBgpSessions()
 	if err != nil {
 		log.Printf("[SyncSessions] Failed to get remote sessions: %v", err)
