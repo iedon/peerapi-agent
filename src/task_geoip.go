@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os/exec"
@@ -30,12 +31,12 @@ func removeDuplicateEndpoints(endpoints []string) []string {
 
 // checkSessionGeoLocation checks if a session's endpoint location is allowed
 // Returns true if the session should be torn down
-func checkSessionGeoLocation(session *BgpSession) bool {
+func checkSessionGeoLocation(session *BgpSession) (bool, error) {
 	// Skip checking if:
 	// - Auto teardown is not enabled
 	// - GeoIP database is not initialized
 	if !cfg.Metric.AutoTeardown || geoDB == nil {
-		return false
+		return false, nil
 	}
 
 	var endpointsToCheck []string
@@ -60,7 +61,7 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 
 	// If no endpoints to check, don't teardown
 	if len(endpointsToCheck) == 0 {
-		return false
+		return false, nil
 	}
 
 	// Remove duplicates to avoid redundant checks
@@ -68,12 +69,12 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 
 	// Check each unique endpoint - if ANY endpoint violates geo rules, teardown the session
 	for _, endpoint := range endpointsToCheck {
-		if shouldTeardownForEndpoint(session, endpoint) {
-			return true
+		if shouldTeardown, err := shouldTeardownForEndpoint(session, endpoint); shouldTeardown {
+			return shouldTeardown, err
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // getWireGuardEndpoint gets the actual endpoint for a WireGuard interface/peer combination
@@ -121,17 +122,17 @@ func getWireGuardEndpoint(interfaceName, publicKey string) string {
 }
 
 // shouldTeardownForEndpoint checks if a specific endpoint should cause session teardown
-func shouldTeardownForEndpoint(session *BgpSession, endpoint string) bool {
+func shouldTeardownForEndpoint(session *BgpSession, endpoint string) (bool, error) {
 	// Get country code from the endpoint
 	countryCode, err := geoIPCountryCode(geoDB, endpoint)
 	if err != nil {
 		log.Printf("<%s> Failed to get country code for %s: %v", session.UUID, endpoint, err)
-		return false // On error, don't teardown
+		return false, nil // On error, don't teardown
 	}
 
 	// If country code is empty, don't teardown
 	if countryCode == "" {
-		return false
+		return false, nil
 	}
 
 	// Check whitelist/blacklist based on configuration
@@ -142,42 +143,42 @@ func shouldTeardownForEndpoint(session *BgpSession, endpoint string) bool {
 		return checkBlacklistModeForEndpoint(session, endpoint, countryCode)
 	default:
 		// For any other mode, don't teardown
-		return false
+		return false, nil
 	}
 }
 
-// checkWhitelistModeForEndpoint checks if a country is in the whitelist for a specific endpoint
+// checkWhitelistModeForEndpoint checks if a country is on the whitelist for a specific endpoint
 // Returns true if the session should be torn down
-func checkWhitelistModeForEndpoint(session *BgpSession, endpoint, countryCode string) bool {
-	// In whitelist mode, tear down if country is NOT in the whitelist
+func checkWhitelistModeForEndpoint(session *BgpSession, endpoint, countryCode string) (bool, error) {
+	// In whitelist mode, tear down if country is NOT on the whitelist
 	for _, allowedCountry := range cfg.Metric.WhitelistGeoCountries {
 		if strings.EqualFold(countryCode, allowedCountry) {
 			// Country is in whitelist, so don't teardown
-			return false
+			return false, nil
 		}
 	}
 
 	// Country not found in whitelist - should be torn down
-	log.Printf("<%s> Endpoint %s, Country %s is not in the whitelist, session will be torn down",
+	log.Printf("<%s> Endpoint %s, Country %s is not on the whitelist, session will be torn down",
 		session.UUID, endpoint, countryCode)
-	return true
+	return true, fmt.Errorf("country `%s` of your endpoint `%s` is not on the whitelist", countryCode, endpoint)
 }
 
-// checkBlacklistModeForEndpoint checks if a country is in the blacklist for a specific endpoint
+// checkBlacklistModeForEndpoint checks if a country is on the blacklist for a specific endpoint
 // Returns true if the session should be torn down
-func checkBlacklistModeForEndpoint(session *BgpSession, endpoint, countryCode string) bool {
-	// In blacklist mode, tear down if country IS in the blacklist
+func checkBlacklistModeForEndpoint(session *BgpSession, endpoint, countryCode string) (bool, error) {
+	// In blacklist mode, tear down if country IS on the blacklist
 	for _, blockedCountry := range cfg.Metric.BlacklistGeoCountries {
 		if strings.EqualFold(countryCode, blockedCountry) {
 			// Country is in blacklist, so teardown
-			log.Printf("<%s> Endpoint %s, Country %s is in the blacklist, session will be torn down",
+			log.Printf("<%s> Endpoint %s, Country %s is on the blacklist, session will be torn down",
 				session.UUID, endpoint, countryCode)
-			return true
+			return true, fmt.Errorf("country `%s` of your endpoint `%s` is on the blacklist", countryCode, endpoint)
 		}
 	}
 
 	// Country not found in blacklist - should not be torn down
-	return false
+	return false, nil
 }
 
 // geoCheckTask runs periodically to check all active sessions against geo rules
@@ -242,18 +243,18 @@ func performGeoCheck() {
 
 	// Check each session against geo rules
 	for _, session := range sessionsToCheck {
-		if checkSessionGeoLocation(&session) {
-			teardownViolatingSession(&session)
+		if shouldTeardown, err := checkSessionGeoLocation(&session); shouldTeardown {
+			teardownViolatingSession(&session, err.Error())
 		}
 	}
 }
 
 // teardownViolatingSession tears down a session that violates geo rules
-func teardownViolatingSession(session *BgpSession) {
+func teardownViolatingSession(session *BgpSession, reason string) {
 	log.Printf("[GeoCheck] <%s> Session violates geo rules, tearing down", session.UUID)
 
 	// Report teardown status to PeerAPI
-	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
+	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN, reason)
 	if err != nil {
 		log.Printf("<%s> Failed to report teardown status: %v", session.UUID, err)
 	}
