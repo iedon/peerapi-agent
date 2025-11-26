@@ -61,7 +61,7 @@ func getBgpSessions() ([]BgpSession, error) {
 	}
 
 	// Build request URL
-	url := fmt.Sprintf("%s/agent/%s/sessions", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
+	url := fmt.Sprintf("%s/agent/%s/sessions", cfg.PeerAPI.APIURL, cfg.PeerAPI.RouterUUID)
 
 	// Generate authentication token
 	token, err := generateToken()
@@ -123,7 +123,7 @@ func reportNewStatusToCenter(sessionUUID string, status int, lastError string) e
 	}
 
 	// Build request URL
-	url := fmt.Sprintf("%s/agent/%s/modify", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
+	url := fmt.Sprintf("%s/agent/%s/modify", cfg.PeerAPI.APIURL, cfg.PeerAPI.RouterUUID)
 
 	// Generate authentication token
 	token, err := generateToken()

@@ -22,7 +22,10 @@
   },
 
   "peerApiCenter": {
-    "url": "http://10.127.21.55:3000",
+    "apiUrl": "http://10.127.21.55:3000",
+    "probeServerIPv4": "172.23.91.112",
+    "probeServerIPv6": "fd42:4242:2189:112::1",
+    "probeServerPort": 3000,
     "secret": "hehehe",
     "requestTimeout": 15,
     "routerUuid": "40ca6d20-048d-4cb2-89be-e94f99af6781",
@@ -98,7 +101,7 @@
     "sessionWorkerCount": 64,
     "maxRTTMetricsHistroy": 288,
     "geoCheckInterval": 900,
-    "bgpCommunityUpdateInterval": 3600
+    "filterParamsUpdateInterval": 3600
   },
 
   "wireguard": {
@@ -126,5 +129,18 @@
     "localEndpointDesc6":"Please contact to get IPv6 endpoint",
     "dn42BandwidthCommunity": 24,
     "dn42InterfaceSecurityCommunity": 31
+  },
+
+  "peerProbe": {
+    "enabled": true,
+    "intervalSeconds": 300,
+    "srcIpv4": "172.23.91.118",
+    "srcIpv6": "fd42:4242:2189:118::1",
+    "probePacketCount": 5,
+    "probePacketIntervalMs": 100,
+    "probePacketEncryptionKey": "s3cr3tK3yF0rPr0b3P4ck3t",
+    "sessionWorkerCount": 32,
+    "probePacketBanner": "iEdon-Net PeerAPI Peering Prober",
+    "probeSummaryCooldownSeconds": 30
   }
 }

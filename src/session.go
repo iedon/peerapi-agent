@@ -40,7 +40,8 @@ type BirdTemplateData struct {
 	IPv6ShouldImport  bool   // Whether to import IPv6 routes
 	IPv6ShouldExport  bool   // Whether to export IPv6 routes
 	ExtendedNextHopOn bool   // Whether to enable extended next hop
-	FilterParams      string // Parameters for BGP filtering
+	FilterParamsIPv4  string // IPv4-specific filter parameters
+	FilterParamsIPv6  string // IPv6-specific filter parameters
 }
 
 var birdConfMutex sync.Mutex
@@ -513,6 +514,9 @@ func generateMPBGPConfig(outFile *os.File, session *BgpSession, sessionName stri
 		return err
 	}
 
+	filterParamsIPv4 := fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4))
+	filterParamsIPv6 := fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6))
+
 	templateData := BirdTemplateData{
 		SessionName:       sessionName,
 		InterfaceAddr:     interfaceAddr,
@@ -522,7 +526,8 @@ func generateMPBGPConfig(outFile *os.File, session *BgpSession, sessionName stri
 		IPv6ShouldImport:  true,
 		IPv6ShouldExport:  true,
 		ExtendedNextHopOn: extendedNexthop,
-		FilterParams:      fmt.Sprintf("%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy),
+		FilterParamsIPv4:  filterParamsIPv4,
+		FilterParamsIPv6:  filterParamsIPv6,
 	}
 
 	if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {
@@ -552,7 +557,8 @@ func generateTraditionalBGPConfig(outFile *os.File, session *BgpSession, session
 			IPv6ShouldImport:  true,
 			IPv6ShouldExport:  true,
 			ExtendedNextHopOn: extendedNexthop,
-			FilterParams:      fmt.Sprintf("%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy),
+			FilterParamsIPv4:  fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4)),
+			FilterParamsIPv6:  fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6)),
 		}
 
 		if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {
@@ -571,7 +577,8 @@ func generateTraditionalBGPConfig(outFile *os.File, session *BgpSession, session
 			IPv6ShouldImport:  false,
 			IPv6ShouldExport:  false,
 			ExtendedNextHopOn: extendedNexthop,
-			FilterParams:      fmt.Sprintf("%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy),
+			FilterParamsIPv4:  fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4)),
+			FilterParamsIPv6:  fmt.Sprintf("%d,%d,%d,%d,%d", 0, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6)),
 		}
 
 		if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {

@@ -194,7 +194,7 @@ func heartbeatTask(ctx context.Context, wg *sync.WaitGroup) {
 
 // sendHeartbeat sends a heartbeat message to the PeerAPI server
 func sendHeartbeat(httpClient *http.Client, uname string) {
-	url := fmt.Sprintf("%s/agent/%s/heartbeat", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
+	url := fmt.Sprintf("%s/agent/%s/heartbeat", cfg.PeerAPI.APIURL, cfg.PeerAPI.RouterUUID)
 	token, err := generateToken()
 	if err != nil {
 		log.Printf("[HeartBeat] Failed to generate token: %v\n", err)

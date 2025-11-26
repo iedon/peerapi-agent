@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"text/template"
 )
@@ -19,8 +20,11 @@ type serverConfig struct {
 	TrustedProxies  []string `json:"trustedProxies"` // String array of IP or CIDR. X-Forwarded headers from these networks will be trusted.
 }
 
-type peerApiCenterConfig struct {
-	URL                         string   `json:"url"`               // URL of the PeerAPI center server
+type peerApiCenterConfig struct { // Legacy property to maintain backward compatibility
+	APIURL                      string   `json:"apiUrl"`            // URL of the PeerAPI center server
+	ProbeServerIPv4             string   `json:"probeServerIPv4"`   // IPv4 address of probe server endpoint
+	ProbeServerIPv6             string   `json:"probeServerIPv6"`   // IPv6 address of probe server endpoint
+	ProbeServerPort             int      `json:"probeServerPort"`   // UDP port for probe server
 	Secret                      string   `json:"secret"`            // Secret key for PeerAPI center authentication
 	RequestTimeout              int      `json:"requestTimeout"`    // Timeout for requests to the PeerAPI center
 	RouterUUID                  string   `json:"routerUuid"`        // UUID of this router from PeerAPI center server
@@ -98,7 +102,7 @@ type metricConfig struct {
 	SessionWorkerCount            int      `json:"sessionWorkerCount"`            // Number of workers for parallel session metric collection (default: 8)
 	MaxRTTMetricsHistroy          int      `json:"maxRTTMetricsHistroy"`          // Maximum number of RTT historical metrics to keep for each metric type of each session, used for calculating average RTT / Loss rate and bgp latency community
 	GeoCheckInterval              int      `json:"geoCheckInterval"`              // Interval for geo check task in seconds
-	BGPCommunityUpdateInterval    int      `json:"bgpCommunityUpdateInterval"`    // Interval for DN42 BGP community update task in seconds
+	FilterParamsUpdateInterval    int      `json:"filterParamsUpdateInterval"`    // Interval for DN42 BGP community update task in seconds
 }
 
 type sysctlConfig struct {
@@ -111,6 +115,19 @@ type sysctlConfig struct {
 	IfaceAcceptLocal   bool   `json:"ifaceAcceptLocal"`   // Accept local traffic on interfaces(must be on for anycasting, eg. DN42 Anycast DNS)
 }
 
+type peerProbeConfig struct {
+	Enabled                     bool   `json:"enabled"`
+	IntervalSeconds             int    `json:"intervalSeconds"`
+	SrcIPv4                     string `json:"srcIpv4"`
+	SrcIPv6                     string `json:"srcIpv6"`
+	ProbePacketCount            int    `json:"probePacketCount"`
+	ProbePacketIntervalMs       int    `json:"probePacketIntervalMs"`
+	ProbePacketEncryptionKey    string `json:"probePacketEncryptionKey"`
+	SessionWorkerCount          int    `json:"sessionWorkerCount"`
+	ProbePacketBanner           string `json:"probePacketBanner"`
+	ProbeSummaryCooldownSeconds int    `json:"probeSummaryCooldownSeconds"`
+}
+
 type config struct {
 	Server    serverConfig        `json:"server"`
 	PeerAPI   peerApiCenterConfig `json:"peerApiCenter"`
@@ -120,6 +137,7 @@ type config struct {
 	WireGuard wireGuardConfig     `json:"wireGuard"`
 	GRE       greConfig           `json:"gre"`
 	Logger    loggerConfig        `json:"logger"`
+	PeerProbe peerProbeConfig     `json:"peerProbe"`
 }
 
 func loadConfig(filename string) (*config, error) {
@@ -158,6 +176,10 @@ func loadConfig(filename string) (*config, error) {
 			return cfg, err
 		}
 		cfg.Bird.BGPPeerConfTemplate = tmpl
+	}
+
+	if cfg.PeerAPI.APIURL == "" {
+		return nil, fmt.Errorf("peerApiCenter.apiUrl is required")
 	}
 
 	return cfg, nil

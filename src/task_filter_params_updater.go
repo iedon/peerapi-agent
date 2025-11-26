@@ -1,5 +1,7 @@
 // Package main implements the peerapi agent functionality
-// This file focuses on DN42 BGP Community management based on RTT metrics
+// This file focuses on DN42 BGP Community management based on RTT metrics,
+// and updating BIRD filter parameters accordingly
+
 package main
 
 import (
@@ -101,9 +103,13 @@ func getLatencyCommunityValue(rtt int) int {
 	return communityValue
 }
 
+func composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, policy, probeFlag int) string {
+	return fmt.Sprintf("%d,%d,%d,%d,%d", latencyCommunity, ifBwCommunity, ifSecCommunity, policy, probeFlag)
+}
+
 // updateFilterParams updates the filter parameters for all active BGP sessions
 func updateFilterParams() {
-	log.Println("[DN42BGPCommunity] Updating filter parameters...")
+	log.Println("[FilterParamsUpdater] Updating filter parameters...")
 
 	// Get all active sessions
 	sessionMutex.RLock()
@@ -116,7 +122,7 @@ func updateFilterParams() {
 	sessionMutex.RUnlock()
 
 	if len(sessions) == 0 {
-		log.Println("[DN42BGPCommunity] No active sessions to update")
+		log.Println("[FilterParamsUpdater] No active sessions to update")
 		return
 	}
 
@@ -152,10 +158,10 @@ func updateFilterParams() {
 		// Log effective RTT value, loss rate, and corresponding community for debugging
 		// rttMutex.RLock()
 		// if tracker, trackerExists := rttTrackers[session.UUID]; trackerExists {
-		// 	log.Printf("[DN42BGPCommunity] Session %s: effective RTT %d ms (loss rate: %.2f%%), mapped to community value %d",
+		// 	log.Printf("[FilterParamsUpdater] Session %s: effective RTT %d ms (loss rate: %.2f%%), mapped to community value %d",
 		// 		session.UUID, rtt, tracker.AvgLoss*100, latencyCommunityValue)
 		// } else {
-		// 	log.Printf("[DN42BGPCommunity] Session %s: RTT %d ms (no tracker), mapped to community value %d",
+		// 	log.Printf("[FilterParamsUpdater] Session %s: RTT %d ms (no tracker), mapped to community value %d",
 		// 		session.UUID, rtt, latencyCommunityValue)
 		// }
 		// rttMutex.RUnlock()
@@ -165,14 +171,14 @@ func updateFilterParams() {
 
 		// Update the BIRD configuration
 		if err := updateBirdConfig(&session, latencyCommunityValue, ifBwCommunity, ifSecCommunity); err != nil {
-			log.Printf("[DN42BGPCommunity] Failed to update BIRD config for session %s: %v", session.UUID, err)
+			log.Printf("[FilterParamsUpdater] Failed to update BIRD config for session %s: %v", session.UUID, err)
 			failedCount++
 		} else {
 			updatedCount++
 		}
 	}
 
-	log.Printf("[DN42BGPCommunity] Updated %d sessions, %d failed", updatedCount, failedCount)
+	log.Printf("[FilterParamsUpdater] Updated %d sessions, %d failed", updatedCount, failedCount)
 
 	// Reload BIRD configuration
 	reloadBirdConfig()
@@ -182,7 +188,7 @@ func updateFilterParams() {
 // with latency community values
 func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSecCommunity int) error {
 	confPath := path.Join(cfg.Bird.BGPPeerConfDir, session.Interface+".conf")
-	// log.Printf("[DN42BGPCommunity] Updating BIRD config for session %s (interface: %s) with latency community value %d",
+	// log.Printf("[FilterParamsUpdater] Updating BIRD config for session %s (interface: %s) with latency community value %d",
 	//	session.UUID, session.Interface, latencyCommunity)
 
 	birdConfMutex.Lock()
@@ -195,7 +201,7 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 
 	// Remove existing config file if it exists
 	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("[DN42BGPCommunity] Warning: Failed to remove existing BIRD config at %s: %v", confPath, err)
+		log.Printf("[FilterParamsUpdater] Warning: Failed to remove existing BIRD config at %s: %v", confPath, err)
 		// Continue anyway
 	}
 
@@ -221,6 +227,9 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 			return err
 		}
 
+		filterParamsIPv4 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4))
+		filterParamsIPv6 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6))
+
 		templateData := BirdTemplateData{
 			SessionName:       sessionName,
 			InterfaceAddr:     interfaceAddr,
@@ -230,7 +239,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 			IPv6ShouldImport:  true,
 			IPv6ShouldExport:  true,
 			ExtendedNextHopOn: extendedNexthop,
-			FilterParams:      fmt.Sprintf("%d,%d,%d,%d", latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy),
+			FilterParamsIPv4:  filterParamsIPv4,
+			FilterParamsIPv6:  filterParamsIPv6,
 		}
 
 		if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {
@@ -240,6 +250,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 		// For traditional BGP, generate separate protocols for IPv4 and IPv6
 		// Generate IPv6 config if IPv6 addresses are available
 		if session.IPv6LinkLocal != "" || session.IPv6 != "" {
+			filterParamsIPv4 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4))
+			filterParamsIPv6 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6))
 			var interfaceAddr string
 			if session.IPv6LinkLocal != "" {
 				interfaceAddr = fmt.Sprintf("%s%%'%s'", session.IPv6LinkLocal, session.Interface)
@@ -256,7 +268,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 				IPv6ShouldImport:  true,
 				IPv6ShouldExport:  true,
 				ExtendedNextHopOn: extendedNexthop,
-				FilterParams:      fmt.Sprintf("%d,%d,%d,%d", latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy),
+				FilterParamsIPv4:  filterParamsIPv4,
+				FilterParamsIPv6:  filterParamsIPv6,
 			}
 
 			if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {
@@ -266,6 +279,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 
 		// Generate IPv4 config if an IPv4 address is available
 		if session.IPv4 != "" {
+			filterParamsIPv4 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv4))
+			filterParamsIPv6 := composeFilterParams(latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy, probeStatusFlag(session.UUID, probeFamilyIPv6))
 			templateData := BirdTemplateData{
 				SessionName:       sessionName + "_v4",
 				InterfaceAddr:     session.IPv4,
@@ -275,7 +290,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 				IPv6ShouldImport:  false,
 				IPv6ShouldExport:  false,
 				ExtendedNextHopOn: extendedNexthop,
-				FilterParams:      fmt.Sprintf("%d,%d,%d,%d", latencyCommunity, ifBwCommunity, ifSecCommunity, session.Policy),
+				FilterParamsIPv4:  filterParamsIPv4,
+				FilterParamsIPv6:  filterParamsIPv6,
 			}
 
 			if err := cfg.Bird.BGPPeerConfTemplate.Execute(outFile, templateData); err != nil {
@@ -284,7 +300,7 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 		}
 	}
 
-	// log.Printf("[DN42BGPCommunity] Successfully updated BIRD config for session %s with latency community %d",
+	// log.Printf("[FilterParamsUpdater] Successfully updated BIRD config for session %s with latency community %d",
 	//	session.UUID, latencyCommunity)
 	return nil
 }
@@ -292,23 +308,23 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 // reloadBirdConfig reloads the BIRD configuration
 func reloadBirdConfig() {
 	if ok, err := birdPool.Configure(); err != nil {
-		log.Printf("[DN42BGPCommunity] Failed to reload BIRD configuration: %v", err)
+		log.Printf("[FilterParamsUpdater] Failed to reload BIRD configuration: %v", err)
 	} else if !ok {
-		log.Printf("[DN42BGPCommunity] BIRD configuration reload failed")
+		log.Printf("[FilterParamsUpdater] BIRD configuration reload failed")
 	} else {
-		log.Printf("[DN42BGPCommunity] BIRD configuration reloaded successfully")
+		log.Printf("[FilterParamsUpdater] BIRD configuration reloaded successfully")
 	}
 }
 
-// dn42BGPCommunityTask periodically updates the BGP communities based on RTT metrics
-func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
+// filterParamsUpdaterTask periodically updates the BGP communities based on RTT metrics
+func filterParamsUpdaterTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	// Wait 120 seconds before the first run to allow RTT measurements to be collected
 	select {
 	case <-ctx.Done():
 		shutdownStart := time.Now()
-		log.Println("[DN42BGPCommunity] Shutting down DN42 BGP Community update task before initial run")
-		log.Printf("[DN42BGPCommunity] Task shutdown completed in %v", time.Since(shutdownStart))
+		log.Println("[FilterParamsUpdater] Shutting down DN42 BGP Community update task before initial run")
+		log.Printf("[FilterParamsUpdater] Task shutdown completed in %v", time.Since(shutdownStart))
 		return
 	case <-time.After(120 * time.Second):
 		// Continue with execution
@@ -316,11 +332,11 @@ func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
 
 	// Use configured interval, default to 60 minutes (3600 seconds) if not set
 	interval := 3600
-	if cfg.Metric.BGPCommunityUpdateInterval > 0 {
-		interval = cfg.Metric.BGPCommunityUpdateInterval
+	if cfg.Metric.FilterParamsUpdateInterval > 0 {
+		interval = cfg.Metric.FilterParamsUpdateInterval
 	}
 
-	log.Printf("[DN42BGPCommunity] Running with update interval of %d seconds", interval)
+	log.Printf("[FilterParamsUpdater] Running with update interval of %d seconds", interval)
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
@@ -331,12 +347,12 @@ func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
 		select {
 		case <-ctx.Done():
 			shutdownStart := time.Now()
-			log.Println("[DN42BGPCommunity] Shutting down DN42 BGP Community update task...")
+			log.Println("[FilterParamsUpdater] Shutting down DN42 BGP Community update task...")
 
 			// Perform any DN42 BGP Community-specific cleanup
-			log.Println("[DN42BGPCommunity] Ensuring Bird filter parameters are in a consistent state")
+			log.Println("[FilterParamsUpdater] Ensuring Bird filter parameters are in a consistent state")
 
-			log.Printf("[DN42BGPCommunity] Task shutdown completed in %v", time.Since(shutdownStart))
+			log.Printf("[FilterParamsUpdater] Task shutdown completed in %v", time.Since(shutdownStart))
 			return
 		case <-ticker.C:
 			updateFilterParams()

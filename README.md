@@ -228,7 +228,7 @@ The agent is configured through a JSON file with the following structure. All co
     "pingTimeout": 5,
     "pingCount": 4,
     "geoCheckInterval": 900,
-    "bgpCommunityUpdateInterval": 3600
+    "filterParamsUpdateInterval": 3600
   },
 
   "wireguard": {
@@ -355,7 +355,7 @@ Performance monitoring and geographic validation settings.
 | `pingTimeout` | integer | Ping request timeout in seconds | Yes |
 | `pingCount` | integer | Number of ping attempts for RTT measurement | Yes |
 | `geoCheckInterval` | integer | Geographic validation check interval in seconds | No |
-| `bgpCommunityUpdateInterval` | integer | DN42 BGP community update interval in seconds | No |
+| `filterParamsUpdateInterval` | integer | DN42 BGP community and filter params update interval in seconds | No |
 
 #### WireGuard Configuration (`wireguard`)
 

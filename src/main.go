@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,19 +16,6 @@ import (
 	"github.com/iedon/peerapi-agent/bird"
 	"github.com/oschwald/geoip2-golang"
 )
-
-const (
-	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.8.1"
-)
-
-var GIT_COMMIT string // Set at build time via -ldflags "-X main.GIT_COMMIT=$(git rev-parse --short HEAD)"
-var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, func() string {
-	if GIT_COMMIT != "" {
-		return GIT_COMMIT
-	}
-	return "unknown"
-}(), runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 var (
 	cfg      *config
@@ -142,15 +128,17 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Start background tasks with context and waitgroup
-	wg.Add(8) // 8 is the number of background tasks
+	backgroundTaskCount := 9
+	wg.Add(backgroundTaskCount)
 	go heartbeatTask(ctx, &wg)
 	go mainSessionTask(ctx, &wg)
 	go metricTask(ctx, &wg)
 	go batchRTTTask(ctx, &wg)
 	go bandwidthMonitorTask(ctx, &wg)
-	go dn42BGPCommunityTask(ctx, &wg)
+	go filterParamsUpdaterTask(ctx, &wg)
 	go geoCheckTask(ctx, &wg)
 	go wireGuardDNSTask(ctx, &wg)
+	go peerProbeTask(ctx, &wg)
 
 	// Set up signal handling for graceful shutdown
 	shutdownChan := make(chan os.Signal, 1)
@@ -198,7 +186,7 @@ func main() {
 	}
 
 	// Wait for all background tasks to complete with timeout
-	log.Printf("Waiting for %d background tasks to complete...", 8) // 8 is the number of background tasks
+	log.Printf("Waiting for %d background tasks to complete...", backgroundTaskCount)
 	taskShutdownStart := time.Now()
 
 	waitChan := make(chan struct{})

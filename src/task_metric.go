@@ -211,7 +211,7 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 		return
 	}
 
-	url := fmt.Sprintf("%s/agent/%s/report", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
+	url := fmt.Sprintf("%s/agent/%s/report", cfg.PeerAPI.APIURL, cfg.PeerAPI.RouterUUID)
 	token, err := generateToken()
 	if err != nil {
 		log.Printf("[Metrics] Failed to generate token: %v\n", err)

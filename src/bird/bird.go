@@ -30,6 +30,12 @@ type BirdPool struct {
 	socketPath             string
 	// nextID      int           // For assigning connection IDs
 	shutdown chan struct{} // Graceful shutdown signal
+
+	dialMu          sync.Mutex
+	lastDialFailure time.Time
+	dialBackoff     time.Duration
+	dialBackoffMin  time.Duration
+	dialBackoffMax  time.Duration
 }
 
 // ProtocolMetrics represents the metrics for a single BGP protocol/session
@@ -77,6 +83,8 @@ func NewBirdPool(socketPath string, poolSize, poolSizeMax, connectionMaxRetries,
 		socketPath:             socketPath,
 		available:              make(chan *PooledConnection, poolSizeMax), // Buffered channel
 		shutdown:               make(chan struct{}),
+		dialBackoffMin:         time.Second,
+		dialBackoffMax:         30 * time.Second,
 	}
 
 	// Initialize connection pool
@@ -103,12 +111,54 @@ func NewBirdPool(socketPath string, poolSize, poolSizeMax, connectionMaxRetries,
 	return bp, nil
 }
 
+func (bp *BirdPool) waitForDialWindow() {
+	bp.dialMu.Lock()
+	backoff := bp.dialBackoff
+	lastFailure := bp.lastDialFailure
+	bp.dialMu.Unlock()
+
+	if backoff == 0 {
+		return
+	}
+
+	waitUntil := lastFailure.Add(backoff)
+	sleep := time.Until(waitUntil)
+	if sleep > 0 {
+		time.Sleep(sleep)
+	}
+}
+
+func (bp *BirdPool) recordDialFailure() {
+	now := time.Now()
+	bp.dialMu.Lock()
+	if bp.dialBackoff == 0 {
+		bp.dialBackoff = bp.dialBackoffMin
+	} else {
+		bp.dialBackoff *= 2
+		if bp.dialBackoff > bp.dialBackoffMax {
+			bp.dialBackoff = bp.dialBackoffMax
+		}
+	}
+	bp.lastDialFailure = now
+	bp.dialMu.Unlock()
+}
+
+func (bp *BirdPool) resetDialBackoff() {
+	bp.dialMu.Lock()
+	bp.dialBackoff = 0
+	bp.lastDialFailure = time.Time{}
+	bp.dialMu.Unlock()
+}
+
 func (bp *BirdPool) createConnection() (*BirdConn, error) {
 	// With retry logic for handling connection / temporary resource unavailability
 	var lastError error
-	for attempt := range bp.connectionMaxRetries {
-		bc, lastError := NewBirdConnection(bp.socketPath)
-		if lastError != nil {
+	for attempt := 0; attempt < bp.connectionMaxRetries; attempt++ {
+		bp.waitForDialWindow()
+		bc, err := NewBirdConnection(bp.socketPath)
+		if err != nil {
+			lastError = err
+			bp.recordDialFailure()
 			// Retry on connection failure
 			if attempt < bp.connectionMaxRetries-1 {
 				time.Sleep(time.Duration(bp.connectionRetryDelayMs) * time.Millisecond)
@@ -116,15 +166,18 @@ func (bp *BirdPool) createConnection() (*BirdConn, error) {
 			}
 			return nil, lastError
 		}
+		bp.resetDialBackoff()
 
-		restricted, err := bc.Restrict()
-		if err != nil || !restricted {
-			bc.Close()
-			if err == nil {
-				err = fmt.Errorf("failed to enter restricted mode")
+		restricted, restrictErr := bc.Restrict()
+		if restrictErr != nil || !restricted {
+			if restrictErr == nil {
+				restrictErr = fmt.Errorf("failed to enter restricted mode")
 			}
+			lastError = restrictErr
+			bc.Close()
+			bp.recordDialFailure()
 			// Don't retry restriction failures
-			return nil, err
+			return nil, restrictErr
 		}
 
 		return bc, nil
@@ -360,14 +413,17 @@ func (bp *BirdPool) ShowStatus() (string, error) {
 
 // This does not affect by pool size, always use a new conn
 func (bp *BirdPool) Configure() (bool, error) {
+	bp.waitForDialWindow()
 	bc, err := NewBirdConnection(bp.socketPath)
 	if err != nil {
+		bp.recordDialFailure()
 		return false, err
 	}
+	bp.resetDialBackoff()
 	defer bc.Close()
 
 	if err := bc.Write("configure"); err != nil {
-		return false, nil
+		return false, err
 	}
 
 	// Dismiss output
