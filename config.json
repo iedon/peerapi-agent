@@ -12,6 +12,12 @@
     "trustedProxies": ["127.0.0.1", "::1"]
   },
 
+  "ipConfig": {
+    "ipv4": "172.23.91.118",
+    "ipv6": "fd42:4242:2189:118::1",
+    "ipv6LinkLocal": "fe80::2189:118"
+  },
+
   "logger": {
     "file": "./logs/peerapi-agent.log",
     "maxSize": 10,
@@ -24,7 +30,8 @@
   "peerApiCenter": {
     "apiUrl": "http://10.127.21.55:3000",
     "probeServerIPv4": "172.23.91.112",
-    "probeServerIPv6": "fd42:4242:2189:112::1",
+    "probeServerIPv6": "fd42:4242:2189:ac:6::1",
+    "probeServerIPv6Prefix": "fd42:4242:2189:ac::/64",
     "probeServerPort": 3000,
     "secret": "hehehe",
     "requestTimeout": 15,
@@ -106,9 +113,6 @@
 
   "wireguard": {
     "wgCommandPath": "/usr/bin/wg",
-    "ipv4": "172.23.91.132",
-    "ipv6": "fd42:4242:2189:118::1",
-    "ipv6LinkLocal": "fe80::118",
     "privateKeyPath": "/etc/wireguard/privatekey",
     "publicKeyPath": "/etc/wireguard/publickey",
     "persistentKeepaliveInterval": 25,
@@ -120,9 +124,6 @@
   },
 
   "gre": {
-    "ipv4": "172.23.91.132",
-    "ipv6": "fd42:4242:2189:118::1",
-    "ipv6LinkLocal": "fe80::118",
     "localEndpointHost4":"1.1.1.1",
     "localEndpointHost6":"fd00::1",
     "localEndpointDesc4":"Please contact to get IPv4 endpoint",
@@ -134,13 +135,12 @@
   "peerProbe": {
     "enabled": true,
     "intervalSeconds": 300,
-    "srcIpv4": "172.23.91.118",
-    "srcIpv6": "fd42:4242:2189:118::1",
     "probePacketCount": 5,
     "probePacketIntervalMs": 100,
     "probePacketEncryptionKey": "s3cr3tK3yF0rPr0b3P4ck3t",
     "sessionWorkerCount": 32,
     "probePacketBanner": "iEdon-Net PeerAPI Peering Prober",
-    "probeSummaryCooldownSeconds": 30
+    "probeSummaryCooldownSeconds": 30,
+    "ipv6ProbingNextHopRouteMetric": 9999
   }
 }

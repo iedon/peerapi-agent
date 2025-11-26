@@ -18,12 +18,12 @@ import (
 	"math"
 	"net"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -143,7 +143,7 @@ func runPeerProbe(ctx context.Context) {
 					continue
 				}
 				if err := probeSession(ctx, session, endpoints, packet); err != nil {
-					log.Printf("[PeerProbe] Session %s probe failed: %v", session.UUID, err)
+					// log.Printf("[PeerProbe] Session %s probe failed: %v", session.UUID, err)
 					results <- false
 				} else {
 					results <- true
@@ -169,7 +169,7 @@ func runPeerProbe(ctx context.Context) {
 		}
 	}
 
-	log.Printf("[PeerProbe] Probed %d/%d sessions using %d workers in %v", success, len(sessions), workerCount, time.Since(start))
+	log.Printf("[PeerProbe] Probed %d succeeded of %d enabled sessions using %d workers in %v", success, len(sessions), workerCount, time.Since(start))
 }
 
 func finalizePeerProbeRun(ctx context.Context) {
@@ -212,17 +212,17 @@ func buildPeerProbeEndpoints() (peerProbeEndpoints, error) {
 	var ep peerProbeEndpoints
 	ep.port = cfg.PeerAPI.ProbeServerPort
 
-	if cfg.PeerProbe.SrcIPv4 != "" {
-		ip := net.ParseIP(cfg.PeerProbe.SrcIPv4)
+	if cfg.IP.IPv4 != "" {
+		ip := net.ParseIP(cfg.IP.IPv4)
 		if ip == nil || ip.To4() == nil {
-			return ep, fmt.Errorf("invalid peerProbe.srcIpv4: %s", cfg.PeerProbe.SrcIPv4)
+			return ep, fmt.Errorf("invalid peerProbe.srcIpv4: %s", cfg.IP.IPv4)
 		}
 		ep.srcIPv4 = ip.To4()
 	}
-	if cfg.PeerProbe.SrcIPv6 != "" {
-		ip := net.ParseIP(cfg.PeerProbe.SrcIPv6)
+	if cfg.IP.IPv6 != "" {
+		ip := net.ParseIP(cfg.IP.IPv6)
 		if ip == nil || ip.To16() == nil {
-			return ep, fmt.Errorf("invalid peerProbe.srcIpv6: %s", cfg.PeerProbe.SrcIPv6)
+			return ep, fmt.Errorf("invalid peerProbe.srcIpv6: %s", cfg.IP.IPv6)
 		}
 		ep.srcIPv6 = ip.To16()
 	}
@@ -392,7 +392,7 @@ func dispatchProbes(ctx context.Context, network string, srcIP, dstIP net.IP, po
 
 	var combined error
 	for i := 0; i < cfg.PeerProbe.ProbePacketCount; i++ {
-		if err := sendSingleProbe(ctx, network, srcIP, dstIP, port, iface, packet); err != nil {
+		if err := sendSingleProbe(ctx, dstIP, port, srcIP, iface, packet); err != nil {
 			combined = errors.Join(combined, err)
 		}
 		if i+1 < cfg.PeerProbe.ProbePacketCount {
@@ -409,25 +409,49 @@ func dispatchProbes(ctx context.Context, network string, srcIP, dstIP net.IP, po
 	return combined
 }
 
-func sendSingleProbe(ctx context.Context, network string, srcIP, dstIP net.IP, port int, iface string, packet []byte) error {
-	if srcIP == nil || dstIP == nil {
-		return errors.New("source or destination IP missing")
+func sendSingleProbe(ctx context.Context, dstIP net.IP, dstPort int, srcIP net.IP, iface string, payload []byte) error {
+	if dstIP == nil {
+		return errors.New("destination IP missing")
+	}
+	if iface == "" {
+		return errors.New("session interface is required for probe")
 	}
 
-	localAddr := &net.UDPAddr{IP: srcIP}
-	if network == "udp6" {
-		localAddr.Zone = iface
+	network := "udp6"
+	if dstIP.To4() != nil {
+		network = "udp4"
 	}
 
-	dialer := net.Dialer{
-		Timeout:   5 * time.Second,
-		LocalAddr: localAddr,
-		Control: func(network, address string, c syscall.RawConn) error {
-			return bindToInterface(c, iface)
-		},
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	if srcIP != nil {
+		addr := &net.UDPAddr{IP: srcIP}
+		if srcIP.To4() == nil && srcIP.IsLinkLocalUnicast() {
+			addr.Zone = iface
+		}
+		dialer.LocalAddr = addr
 	}
 
-	target := net.JoinHostPort(dstIP.String(), strconv.Itoa(port))
+	dialer.Control = func(network, address string, c syscall.RawConn) error {
+		var controlErr error
+		err := c.Control(func(fd uintptr) {
+			if err := bindToInterface(fd, iface); err != nil {
+				controlErr = err
+				return
+			}
+			if network == "udp6" && srcIP != nil {
+				if err := bindIPv6Src(fd, iface, srcIP); err != nil {
+					controlErr = err
+					return
+				}
+			}
+		})
+		if err != nil {
+			return err
+		}
+		return controlErr
+	}
+
+	target := net.JoinHostPort(dstIP.String(), fmt.Sprintf("%d", dstPort))
 	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -441,24 +465,48 @@ func sendSingleProbe(ctx context.Context, network string, srcIP, dstIP net.IP, p
 		return err
 	}
 
-	_, err = conn.Write(packet)
+	_, err = conn.Write(payload)
 	return err
 }
 
-func bindToInterface(c syscall.RawConn, iface string) error {
+func bindToInterface(fd uintptr, iface string) error {
 	if iface == "" {
 		return nil
 	}
+	return unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, iface)
+}
 
-	var controlErr error
-	err := c.Control(func(fd uintptr) {
-		controlErr = unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, iface)
-	})
+func bindIPv6Src(fd uintptr, iface string, src net.IP) error {
+	if src == nil || iface == "" {
+		return nil
+	}
+	ifi, err := net.InterfaceByName(iface)
 	if err != nil {
 		return err
 	}
+	var pkt unix.Inet6Pktinfo
+	copy(pkt.Addr[:], src.To16())
+	pkt.Ifindex = uint32(ifi.Index)
+	return setIPv6PktInfo(fd, &pkt)
+}
 
-	return controlErr
+func setIPv6PktInfo(fd uintptr, pkt *unix.Inet6Pktinfo) error {
+	if pkt == nil {
+		return nil
+	}
+	_, _, errno := unix.Syscall6(
+		unix.SYS_SETSOCKOPT,
+		fd,
+		uintptr(unix.IPPROTO_IPV6),
+		uintptr(unix.IPV6_PKTINFO),
+		uintptr(unsafe.Pointer(pkt)),
+		unsafe.Sizeof(*pkt),
+		0,
+	)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func deriveAES256Key(input string) ([]byte, error) {

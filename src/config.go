@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"text/template"
 )
@@ -21,16 +20,17 @@ type serverConfig struct {
 }
 
 type peerApiCenterConfig struct { // Legacy property to maintain backward compatibility
-	APIURL                      string   `json:"apiUrl"`            // URL of the PeerAPI center server
-	ProbeServerIPv4             string   `json:"probeServerIPv4"`   // IPv4 address of probe server endpoint
-	ProbeServerIPv6             string   `json:"probeServerIPv6"`   // IPv6 address of probe server endpoint
-	ProbeServerPort             int      `json:"probeServerPort"`   // UDP port for probe server
-	Secret                      string   `json:"secret"`            // Secret key for PeerAPI center authentication
-	RequestTimeout              int      `json:"requestTimeout"`    // Timeout for requests to the PeerAPI center
-	RouterUUID                  string   `json:"routerUuid"`        // UUID of this router from PeerAPI center server
-	AgentSecret                 string   `json:"agentSecret"`       // Secret key for agent authentication
-	HeartbeatInterval           int      `json:"heartbeatInterval"` // Heartbeat interval in seconds
-	SyncInterval                int      `json:"syncInterval"`      // Session sync interval in seconds
+	APIURL                      string   `json:"apiUrl"`                // URL of the PeerAPI center server
+	ProbeServerIPv4             string   `json:"probeServerIPv4"`       // IPv4 address of probe server endpoint
+	ProbeServerIPv6             string   `json:"probeServerIPv6"`       // IPv6 address of probe server endpoint
+	ProbeServerIPv6Prefix       string   `json:"probeServerIPv6Prefix"` // IPv6 prefix for probe server endpoint, used with IPv6ProbingNextHopRouteMetric, with greater metric value having lower priority, to ensure proper IPv6 probe packets routing
+	ProbeServerPort             int      `json:"probeServerPort"`       // UDP port for probe server
+	Secret                      string   `json:"secret"`                // Secret key for PeerAPI center authentication
+	RequestTimeout              int      `json:"requestTimeout"`        // Timeout for requests to the PeerAPI center
+	RouterUUID                  string   `json:"routerUuid"`            // UUID of this router from PeerAPI center server
+	AgentSecret                 string   `json:"agentSecret"`           // Secret key for agent authentication
+	HeartbeatInterval           int      `json:"heartbeatInterval"`     // Heartbeat interval in seconds
+	SyncInterval                int      `json:"syncInterval"`          // Session sync interval in seconds
 	MetricInterval              int      `json:"metricInterval"`
 	WanInterfaces               []string `json:"wanInterfaces"` // List of WAN interfaces to monitor their traffic
 	SessionPassthroughJwtSecert string   `json:"sessionPassthroughJwtSecert"`
@@ -52,9 +52,6 @@ type birdConfig struct {
 
 type wireGuardConfig struct {
 	WGCommandPath                  string `json:"wgCommandPath"`     // Path to the WireGuard command
-	IPv4                           string `json:"ipv4"`              // IPv4 address for WireGuard interface
-	IPv6                           string `json:"ipv6"`              // IPv6 address for WireGuard interface
-	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`     // IPv6 link-local address for WireGuard interface
 	LocalEndpointHost              string `json:"localEndpointHost"` // Local endpoint for WireGuard interface
 	PrivateKeyPath                 string `json:"privateKeyPath"`    // Private key for WireGuard interface
 	PublicKeyPath                  string `json:"publicKeyPath"`     // Public key for WireGuard interface
@@ -68,9 +65,6 @@ type wireGuardConfig struct {
 }
 
 type greConfig struct {
-	IPv4                           string `json:"ipv4"`               // IPv4 address for GRE interface
-	IPv6                           string `json:"ipv6"`               // IPv6 address for GRE interface
-	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`      // IPv6 link-local address for GRE interface
 	LocalEndpointHost4             string `json:"localEndpointHost4"` // Local IPv4 endpoint for GRE tunnel
 	LocalEndpointHost6             string `json:"localEndpointHost6"` // Local IPv6 endpoint for GRE tunnel
 	LocalEndpointDesc4             string `json:"localEndpointDesc4"` // Description for local IPv4 endpoint
@@ -116,21 +110,27 @@ type sysctlConfig struct {
 }
 
 type peerProbeConfig struct {
-	Enabled                     bool   `json:"enabled"`
-	IntervalSeconds             int    `json:"intervalSeconds"`
-	SrcIPv4                     string `json:"srcIpv4"`
-	SrcIPv6                     string `json:"srcIpv6"`
-	ProbePacketCount            int    `json:"probePacketCount"`
-	ProbePacketIntervalMs       int    `json:"probePacketIntervalMs"`
-	ProbePacketEncryptionKey    string `json:"probePacketEncryptionKey"`
-	SessionWorkerCount          int    `json:"sessionWorkerCount"`
-	ProbePacketBanner           string `json:"probePacketBanner"`
-	ProbeSummaryCooldownSeconds int    `json:"probeSummaryCooldownSeconds"`
+	Enabled                       bool   `json:"enabled"`
+	IntervalSeconds               int    `json:"intervalSeconds"`
+	ProbePacketCount              int    `json:"probePacketCount"`
+	ProbePacketIntervalMs         int    `json:"probePacketIntervalMs"`
+	ProbePacketEncryptionKey      string `json:"probePacketEncryptionKey"`
+	SessionWorkerCount            int    `json:"sessionWorkerCount"`
+	ProbePacketBanner             string `json:"probePacketBanner"`
+	ProbeSummaryCooldownSeconds   int    `json:"probeSummaryCooldownSeconds"`
+	IPv6ProbingNextHopRouteMetric int    `json:"ipv6ProbingNextHopRouteMetric"`
+}
+
+type ipConfig struct {
+	IPv4          string `json:"ipv4"`
+	IPv6          string `json:"ipv6"`
+	IPv6LinkLocal string `json:"ipv6LinkLocal"`
 }
 
 type config struct {
 	Server    serverConfig        `json:"server"`
 	PeerAPI   peerApiCenterConfig `json:"peerApiCenter"`
+	IP        ipConfig            `json:"ipConfig"`
 	Bird      birdConfig          `json:"bird"`
 	Sysctl    sysctlConfig        `json:"sysctl"`
 	Metric    metricConfig        `json:"metric"`
@@ -176,10 +176,6 @@ func loadConfig(filename string) (*config, error) {
 			return cfg, err
 		}
 		cfg.Bird.BGPPeerConfTemplate = tmpl
-	}
-
-	if cfg.PeerAPI.APIURL == "" {
-		return nil, fmt.Errorf("peerApiCenter.apiUrl is required")
 	}
 
 	return cfg, nil
