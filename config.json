@@ -140,7 +140,6 @@
     "probePacketEncryptionKey": "s3cr3tK3yF0rPr0b3P4ck3t",
     "sessionWorkerCount": 32,
     "probePacketBanner": "iEdon-Net PeerAPI Peering Prober",
-    "probeSummaryCooldownSeconds": 30,
-    "ipv6ProbingNextHopRouteMetric": 9999
+    "probeSummaryCooldownSeconds": 30
   }
 }

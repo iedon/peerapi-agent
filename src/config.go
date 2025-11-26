@@ -110,15 +110,14 @@ type sysctlConfig struct {
 }
 
 type peerProbeConfig struct {
-	Enabled                       bool   `json:"enabled"`
-	IntervalSeconds               int    `json:"intervalSeconds"`
-	ProbePacketCount              int    `json:"probePacketCount"`
-	ProbePacketIntervalMs         int    `json:"probePacketIntervalMs"`
-	ProbePacketEncryptionKey      string `json:"probePacketEncryptionKey"`
-	SessionWorkerCount            int    `json:"sessionWorkerCount"`
-	ProbePacketBanner             string `json:"probePacketBanner"`
-	ProbeSummaryCooldownSeconds   int    `json:"probeSummaryCooldownSeconds"`
-	IPv6ProbingNextHopRouteMetric int    `json:"ipv6ProbingNextHopRouteMetric"`
+	Enabled                     bool   `json:"enabled"`
+	IntervalSeconds             int    `json:"intervalSeconds"`
+	ProbePacketCount            int    `json:"probePacketCount"`
+	ProbePacketIntervalMs       int    `json:"probePacketIntervalMs"`
+	ProbePacketEncryptionKey    string `json:"probePacketEncryptionKey"`
+	SessionWorkerCount          int    `json:"sessionWorkerCount"`
+	ProbePacketBanner           string `json:"probePacketBanner"`
+	ProbeSummaryCooldownSeconds int    `json:"probeSummaryCooldownSeconds"`
 }
 
 type ipConfig struct {

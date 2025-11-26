@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"log"
 	"net"
 	"os"
@@ -535,16 +536,23 @@ func ensurePeerProbeIPv6Route(session *BgpSession) error {
 		return fmt.Errorf("probeServerIPv6Prefix is required for probe route setup")
 	}
 
-	metric := cfg.PeerProbe.IPv6ProbingNextHopRouteMetric
-	if metric <= 0 {
-		metric = 9999
+	const maxAttempts = 100
+	baseMetric := peerProbeRouteMetric(session)
+	for attempt := range maxAttempts {
+		metric := baseMetric + uint32(attempt)
+		metricStr := strconv.FormatUint(uint64(metric), 10)
+		args := []string{"-6", "route", "add", dest, "via", nextHop, "src", localIPv6, "dev", session.Interface, "metric", metricStr}
+		if output, err := runIPCommand(args...); err != nil {
+			if !strings.Contains(output, "File exists") {
+				return fmt.Errorf("failed to install peer probe route for session %s (metric %s): %v (output: \"%s\")", session.UUID, metricStr, err, output)
+			}
+			continue
+		}
+
+		return nil
 	}
 
-	if output, err := runIPCommand("-6", "route", "add", dest, "via", nextHop, "src", localIPv6, "dev", session.Interface, "metric", strconv.Itoa(metric)); err != nil {
-		return fmt.Errorf("failed to install peer probe route for session %s: %v (output: \"%s\")", session.UUID, err, output)
-	}
-
-	return nil
+	return fmt.Errorf("failed to install peer probe route for session %s: exhausted metric retries", session.UUID)
 }
 
 func removePeerProbeIPv6Route(session *BgpSession) error {
@@ -714,4 +722,31 @@ func isIgnorableRouteError(output string) bool {
 	default:
 		return false
 	}
+}
+
+func peerProbeRouteMetric(session *BgpSession) uint32 {
+	data := session.UUID
+	if data == "" {
+		data = session.Interface
+	}
+	if data == "" {
+		data = nextHopFallbackKey(session)
+	}
+
+	hash := crc32.ChecksumIEEE([]byte(data))
+	if hash == 0 || hash < 10000 {
+		hash = 10000
+	}
+	return hash
+}
+
+func nextHopFallbackKey(session *BgpSession) string {
+	nh := sessionIPv6NextHop(session)
+	if nh != "" {
+		return nh
+	}
+	if session.Interface != "" {
+		return session.Interface
+	}
+	return "peer-probe-route"
 }
