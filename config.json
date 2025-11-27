@@ -32,6 +32,7 @@
     "probeServerIPv4": "172.23.91.112",
     "probeServerIPv6": "fd42:4242:2189:ac:6::1",
     "probeServerIPv6Prefix": "fd42:4242:2189:ac::/64",
+    "probeServerIPv6Interface": "eth0",
     "probeServerPort": 3000,
     "secret": "hehehe",
     "requestTimeout": 15,

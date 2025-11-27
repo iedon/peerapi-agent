@@ -88,6 +88,11 @@ func main() {
 	}
 	defer birdPool.Close() // Ensure bird pool is closed on exit
 
+	// Set up probe server route
+	if err := ensureProbeServerIPv6Route(); err != nil {
+		log.Printf("Warning: Failed to install probe server route: %v", err)
+	}
+
 	// Set up HTTP server with router and middleware
 	handler := initRouter(http.NewServeMux())
 
@@ -221,6 +226,11 @@ func initBirdConnectionPool() error {
 // cleanupResources handles the cleanup of all application resources
 func cleanupResources() {
 	log.Println("Performing final resource cleanup...")
+
+	// Remove probe server route
+	if err := removeProbeServerIPv6Route(); err != nil {
+		log.Printf("Warning: Failed to remove probe server route: %v", err)
+	}
 
 	// Clean up Unix socket file if it was used
 	if strings.ToLower(cfg.Server.ListenerType) == "unix" && cfg.Server.Listen != "" {

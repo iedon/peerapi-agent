@@ -20,17 +20,18 @@ type serverConfig struct {
 }
 
 type peerApiCenterConfig struct { // Legacy property to maintain backward compatibility
-	APIURL                      string   `json:"apiUrl"`                // URL of the PeerAPI center server
-	ProbeServerIPv4             string   `json:"probeServerIPv4"`       // IPv4 address of probe server endpoint
-	ProbeServerIPv6             string   `json:"probeServerIPv6"`       // IPv6 address of probe server endpoint
-	ProbeServerIPv6Prefix       string   `json:"probeServerIPv6Prefix"` // IPv6 prefix for probe server endpoint, used with IPv6ProbingNextHopRouteMetric, with greater metric value having lower priority, to ensure proper IPv6 probe packets routing
-	ProbeServerPort             int      `json:"probeServerPort"`       // UDP port for probe server
-	Secret                      string   `json:"secret"`                // Secret key for PeerAPI center authentication
-	RequestTimeout              int      `json:"requestTimeout"`        // Timeout for requests to the PeerAPI center
-	RouterUUID                  string   `json:"routerUuid"`            // UUID of this router from PeerAPI center server
-	AgentSecret                 string   `json:"agentSecret"`           // Secret key for agent authentication
-	HeartbeatInterval           int      `json:"heartbeatInterval"`     // Heartbeat interval in seconds
-	SyncInterval                int      `json:"syncInterval"`          // Session sync interval in seconds
+	APIURL                      string   `json:"apiUrl"`                   // URL of the PeerAPI center server
+	ProbeServerIPv4             string   `json:"probeServerIPv4"`          // IPv4 address of probe server endpoint
+	ProbeServerIPv6             string   `json:"probeServerIPv6"`          // IPv6 address of probe server endpoint
+	ProbeServerIPv6Prefix       string   `json:"probeServerIPv6Prefix"`    // IPv6 prefix for probe server endpoint, used with IPv6ProbingNextHopRouteMetric, with greater metric value having lower priority, to ensure proper IPv6 probe packets routing
+	ProbeServerIPv6Interface    string   `json:"probeServerIPv6Interface"` // Interface for IPv6 next hop route to probe server
+	ProbeServerPort             int      `json:"probeServerPort"`          // UDP port for probe server
+	Secret                      string   `json:"secret"`                   // Secret key for PeerAPI center authentication
+	RequestTimeout              int      `json:"requestTimeout"`           // Timeout for requests to the PeerAPI center
+	RouterUUID                  string   `json:"routerUuid"`               // UUID of this router from PeerAPI center server
+	AgentSecret                 string   `json:"agentSecret"`              // Secret key for agent authentication
+	HeartbeatInterval           int      `json:"heartbeatInterval"`        // Heartbeat interval in seconds
+	SyncInterval                int      `json:"syncInterval"`             // Session sync interval in seconds
 	MetricInterval              int      `json:"metricInterval"`
 	WanInterfaces               []string `json:"wanInterfaces"` // List of WAN interfaces to monitor their traffic
 	SessionPassthroughJwtSecert string   `json:"sessionPassthroughJwtSecert"`

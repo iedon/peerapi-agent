@@ -145,14 +145,9 @@ func probeStatusFlag(uuid string, family probeFamily) int {
 }
 
 func evaluateProbeEndpoint(endpoint probeEndpointSnapshot) int {
-	if !endpoint.Seen {
-		return 0
-	}
-
-	if boolPtrValue(endpoint.Healthy) || boolPtrValue(endpoint.NAT) {
+	if !endpoint.Seen || boolPtrValue(endpoint.NAT) || !boolPtrValue(endpoint.Healthy) {
 		return 1
 	}
-
 	return 0
 }
 

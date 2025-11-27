@@ -516,6 +516,81 @@ func deleteBird(session *BgpSession) error {
 	return nil
 }
 
+func ensureProbeServerIPv6Route() error {
+	if !cfg.PeerProbe.Enabled {
+		return nil
+	}
+
+	prefix := cfg.PeerAPI.ProbeServerIPv6Prefix
+	iface := cfg.PeerAPI.ProbeServerIPv6Interface
+
+	if prefix == "" || iface == "" {
+		return nil
+	}
+
+	nextHop, err := getRoute6Nexthop(cfg.PeerAPI.ProbeServerIPv6, iface)
+	if err != nil || nextHop == "" {
+		return fmt.Errorf("failed to get IPv6 gateway for interface %s: %v", iface, err)
+	}
+
+	args := []string{"-6", "route", "replace", prefix, "via", nextHop, "dev", iface}
+	if output, err := runIPCommand(args...); err != nil {
+		return fmt.Errorf("failed to install probe server route: %v (output: \"%s\")", err, output)
+	}
+
+	return nil
+}
+
+func removeProbeServerIPv6Route() error {
+	if !cfg.PeerProbe.Enabled {
+		return nil
+	}
+
+	prefix := cfg.PeerAPI.ProbeServerIPv6Prefix
+	iface := cfg.PeerAPI.ProbeServerIPv6Interface
+
+	if prefix == "" || iface == "" {
+		return nil
+	}
+
+	nextHop, err := getRoute6Nexthop(cfg.PeerAPI.ProbeServerIPv6, iface)
+	if err != nil || nextHop == "" {
+		return nil
+	}
+
+	args := []string{"-6", "route", "del", prefix, "via", nextHop, "dev", iface}
+	if output, err := runIPCommand(args...); err != nil {
+		if isIgnorableRouteError(output) {
+			return nil
+		}
+		return fmt.Errorf("failed to remove probe server route: %v (output: \"%s\")", err, output)
+	}
+
+	return nil
+}
+
+func getRoute6Nexthop(ipv6, iface string) (string, error) {
+	target := stripCIDRSuffix(ipv6)
+	if target == "" {
+		return "", fmt.Errorf("input ipv6 is not invalid")
+	}
+
+	output, err := runIPCommand("-6", "route", "get", target, "oif", iface)
+	if err != nil {
+		return "", err
+	}
+
+	// Parse output like: "fd42:4242:2189:ac:6::1 from :: via fe80::1 dev eth0 src fd42:4242:2189:118::1 metric 0"
+	fields := strings.Fields(output)
+	for i, field := range fields {
+		if field == "via" && i+1 < len(fields) {
+			return fields[i+1], nil
+		}
+	}
+
+	return "", fmt.Errorf("no nexthop found for %s via interface %s", target, iface)
+}
+
 func ensurePeerProbeIPv6Route(session *BgpSession) error {
 	if !shouldManagePeerProbeRoute(session) {
 		return nil
@@ -735,7 +810,8 @@ func peerProbeRouteMetric(session *BgpSession) uint32 {
 
 	hash := crc32.ChecksumIEEE([]byte(data))
 	if hash == 0 || hash < 10000 {
-		hash = 10000
+		// max uint32 - 10000 + hash
+		hash = 0xFFFFFFFF - 10000 + hash
 	}
 	return hash
 }
