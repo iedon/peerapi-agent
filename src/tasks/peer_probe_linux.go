@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package tasks
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"slices"
@@ -25,6 +24,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/iedon/peerapi-agent/session"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,8 +33,9 @@ var (
 	peerProbeRunning atomic.Bool
 )
 
-func initPeerProbe() error {
-	keyData := strings.TrimSpace(cfg.PeerProbe.ProbePacketEncryptionKey)
+// initialize initializes the peer probe task (Linux-specific)
+func (t *PeerProbeTask) initialize() error {
+	keyData := strings.TrimSpace(t.cfg.PeerProbe.ProbePacketEncryptionKey)
 	if keyData == "" {
 		return fmt.Errorf("peerProbe.probePacketEncryptionKey is required when peer probe task is enabled")
 	}
@@ -54,76 +55,37 @@ func initPeerProbe() error {
 	}
 	peerProbeAEAD = aead
 
-	if cfg.PeerAPI.ProbeServerPort <= 0 || cfg.PeerAPI.ProbeServerPort > math.MaxUint16 {
+	if t.cfg.PeerAPI.ProbeServerPort <= 0 || t.cfg.PeerAPI.ProbeServerPort > math.MaxUint16 {
 		return fmt.Errorf("peerApiCenter.probeServerPort must be between 1 and 65535")
 	}
 
+	t.logger.Info("Peer probe encryption initialized successfully")
 	return nil
 }
 
-// peerProbeTask periodically probes active sessions.
-func peerProbeTask(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	if !cfg.PeerProbe.Enabled {
-		log.Println("[PeerProbe] Task disabled via configuration, skipping start")
-		return
-	}
-
-	if err := initPeerProbe(); err != nil {
-		log.Fatalf("[PeerProbe] Failed to initialize peer probe task: %v", err)
-		return
-	}
-
-	interval := time.Duration(cfg.PeerProbe.IntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 5 * time.Minute
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	runPeerProbe(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("[PeerProbe] Shutting down peer probe task...")
-			return
-		case <-ticker.C:
-			runPeerProbe(ctx)
-		}
-	}
-}
-
-func runPeerProbe(ctx context.Context) {
-	if !cfg.PeerProbe.Enabled {
-		return
-	}
+// executeProbes executes probe packets for the given sessions (Linux-specific)
+func (t *PeerProbeTask) executeProbes(ctx context.Context, sessions []*session.Session) {
 	if !peerProbeRunning.CompareAndSwap(false, true) {
-		log.Println("[PeerProbe] Previous run still in progress, skipping this interval")
+		t.logger.Warn("Previous probe run still in progress, skipping this interval")
 		return
 	}
-	defer finalizePeerProbeRun(ctx)
 	defer peerProbeRunning.Store(false)
 
-	sessions := collectProbeCandidateSessions()
-	if len(sessions) == 0 {
-		log.Println("[PeerProbe] No active sessions eligible for probing")
-		return
-	}
-
-	endpoints, err := buildPeerProbeEndpoints()
+	endpoints, err := t.buildPeerProbeEndpoints()
 	if err != nil {
-		log.Printf("[PeerProbe] Endpoint configuration error: %v", err)
+		t.logger.Error("Endpoint configuration error: %v", err)
 		return
 	}
 
-	packetBuilder := newProbePacketBuilder(endpoints)
+	packetBuilder := t.newProbePacketBuilder(endpoints)
 
 	start := time.Now()
-	workerCount := min(len(sessions), cfg.PeerProbe.SessionWorkerCount)
-	jobs := make(chan BgpSession, len(sessions))
+	workerCount := min(len(sessions), t.cfg.PeerProbe.SessionWorkerCount)
+	if workerCount == 0 {
+		workerCount = min(len(sessions), 8)
+	}
+
+	jobs := make(chan *session.Session, len(sessions))
 	results := make(chan bool, len(sessions))
 
 	var wg sync.WaitGroup
@@ -131,19 +93,18 @@ func runPeerProbe(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for session := range jobs {
+			for sess := range jobs {
 				if ctx.Err() != nil {
 					results <- false
 					continue
 				}
-				packet, err := packetBuilder(session)
+				packet, err := packetBuilder(sess)
 				if err != nil {
-					log.Printf("[PeerProbe] Session %s packet build failed: %v", session.UUID, err)
+					t.logger.Debug("Session %s packet build failed: %v", sess.UUID, err)
 					results <- false
 					continue
 				}
-				if err := probeSession(ctx, session, endpoints, packet); err != nil {
-					// log.Printf("[PeerProbe] Session %s probe failed: %v", session.UUID, err)
+				if err := t.probeSession(ctx, sess, endpoints, packet); err != nil {
 					results <- false
 				} else {
 					results <- true
@@ -152,8 +113,8 @@ func runPeerProbe(ctx context.Context) {
 		}()
 	}
 
-	for _, session := range sessions {
-		jobs <- session
+	for _, sess := range sessions {
+		jobs <- sess
 	}
 	close(jobs)
 
@@ -169,37 +130,11 @@ func runPeerProbe(ctx context.Context) {
 		}
 	}
 
-	log.Printf("[PeerProbe] Probed %d succeeded of %d enabled sessions using %d workers in %v", success, len(sessions), workerCount, time.Since(start))
+	t.logger.Info("Probed %d succeeded of %d enabled sessions using %d workers in %v",
+		success, len(sessions), workerCount, time.Since(start))
 }
 
-func finalizePeerProbeRun(ctx context.Context) {
-	if ctx != nil && ctx.Err() != nil {
-		return
-	}
-
-	_, err := refreshProbeSummariesWithCooldown(ctx)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		log.Printf("[PeerProbe] Failed to refresh probe summaries: %v", err)
-		return
-	}
-}
-
-func collectProbeCandidateSessions() []BgpSession {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
-
-	sessions := make([]BgpSession, 0, len(localSessions))
-	for _, s := range localSessions {
-		if s.Status == PEERING_STATUS_ENABLED || s.Status == PEERING_STATUS_PROBLEM {
-			sessions = append(sessions, s)
-		}
-	}
-	return sessions
-}
-
+// peerProbeEndpoints holds the source and destination addresses for probing
 type peerProbeEndpoints struct {
 	srcIPv4    net.IP
 	srcIPv6    net.IP
@@ -208,36 +143,37 @@ type peerProbeEndpoints struct {
 	port       int
 }
 
-func buildPeerProbeEndpoints() (peerProbeEndpoints, error) {
+// buildPeerProbeEndpoints builds the probe endpoint configuration
+func (t *PeerProbeTask) buildPeerProbeEndpoints() (peerProbeEndpoints, error) {
 	var ep peerProbeEndpoints
-	ep.port = cfg.PeerAPI.ProbeServerPort
+	ep.port = t.cfg.PeerAPI.ProbeServerPort
 
-	if cfg.IP.IPv4 != "" {
-		ip := net.ParseIP(cfg.IP.IPv4)
+	if t.cfg.IP.IPv4 != "" {
+		ip := net.ParseIP(t.cfg.IP.IPv4)
 		if ip == nil || ip.To4() == nil {
-			return ep, fmt.Errorf("invalid peerProbe.srcIpv4: %s", cfg.IP.IPv4)
+			return ep, fmt.Errorf("invalid peerProbe.srcIpv4: %s", t.cfg.IP.IPv4)
 		}
 		ep.srcIPv4 = ip.To4()
 	}
-	if cfg.IP.IPv6 != "" {
-		ip := net.ParseIP(cfg.IP.IPv6)
+	if t.cfg.IP.IPv6 != "" {
+		ip := net.ParseIP(t.cfg.IP.IPv6)
 		if ip == nil || ip.To16() == nil {
-			return ep, fmt.Errorf("invalid peerProbe.srcIpv6: %s", cfg.IP.IPv6)
+			return ep, fmt.Errorf("invalid peerProbe.srcIpv6: %s", t.cfg.IP.IPv6)
 		}
 		ep.srcIPv6 = ip.To16()
 	}
 
-	if cfg.PeerAPI.ProbeServerIPv4 != "" {
-		ip := net.ParseIP(cfg.PeerAPI.ProbeServerIPv4)
+	if t.cfg.PeerAPI.ProbeServerIPv4 != "" {
+		ip := net.ParseIP(t.cfg.PeerAPI.ProbeServerIPv4)
 		if ip == nil || ip.To4() == nil {
-			return ep, fmt.Errorf("invalid peerApiCenter.probeServerIPv4: %s", cfg.PeerAPI.ProbeServerIPv4)
+			return ep, fmt.Errorf("invalid peerApiCenter.probeServerIPv4: %s", t.cfg.PeerAPI.ProbeServerIPv4)
 		}
 		ep.serverIPv4 = ip.To4()
 	}
-	if cfg.PeerAPI.ProbeServerIPv6 != "" {
-		ip := net.ParseIP(cfg.PeerAPI.ProbeServerIPv6)
+	if t.cfg.PeerAPI.ProbeServerIPv6 != "" {
+		ip := net.ParseIP(t.cfg.PeerAPI.ProbeServerIPv6)
 		if ip == nil || ip.To16() == nil {
-			return ep, fmt.Errorf("invalid peerApiCenter.probeServerIPv6: %s", cfg.PeerAPI.ProbeServerIPv6)
+			return ep, fmt.Errorf("invalid peerApiCenter.probeServerIPv6: %s", t.cfg.PeerAPI.ProbeServerIPv6)
 		}
 		ep.serverIPv6 = ip.To16()
 	}
@@ -249,8 +185,9 @@ func buildPeerProbeEndpoints() (peerProbeEndpoints, error) {
 	return ep, nil
 }
 
-func probeSession(ctx context.Context, session BgpSession, ep peerProbeEndpoints, packet []byte) error {
-	needsV4, needsV6 := determineProbeFamilies(session)
+// probeSession sends probe packets for a single session
+func (t *PeerProbeTask) probeSession(ctx context.Context, sess *session.Session, ep peerProbeEndpoints, packet []byte) error {
+	needsV4, needsV6 := t.determineProbeFamilies(sess)
 	if !needsV4 && !needsV6 {
 		return nil
 	}
@@ -263,7 +200,7 @@ func probeSession(ctx context.Context, session BgpSession, ep peerProbeEndpoints
 		case ep.serverIPv4 == nil:
 			combined = errors.Join(combined, errors.New("IPv4 probe requested but probeServerIPv4 is not configured"))
 		default:
-			err := dispatchProbes(ctx, "udp4", ep.srcIPv4, ep.serverIPv4, ep.port, session.Interface, packet)
+			err := t.dispatchProbes(ctx, ep.srcIPv4, ep.serverIPv4, ep.port, sess.Interface, packet)
 			combined = errors.Join(combined, err)
 		}
 	}
@@ -275,7 +212,7 @@ func probeSession(ctx context.Context, session BgpSession, ep peerProbeEndpoints
 		case ep.serverIPv6 == nil:
 			combined = errors.Join(combined, errors.New("IPv6 probe requested but probeServerIPv6 is not configured"))
 		default:
-			err := dispatchProbes(ctx, "udp6", ep.srcIPv6, ep.serverIPv6, ep.port, session.Interface, packet)
+			err := t.dispatchProbes(ctx, ep.srcIPv6, ep.serverIPv6, ep.port, sess.Interface, packet)
 			combined = errors.Join(combined, err)
 		}
 	}
@@ -283,21 +220,24 @@ func probeSession(ctx context.Context, session BgpSession, ep peerProbeEndpoints
 	return combined
 }
 
-func determineProbeFamilies(session BgpSession) (bool, bool) {
-	mpbgp := slices.Contains(session.Extensions, "mp-bgp")
-	hasIPv4 := session.IPv4 != "" || mpbgp
-	hasIPv6 := session.IPv6 != "" || session.IPv6LinkLocal != "" || mpbgp
+// determineProbeFamilies determines which IP families to probe for a session
+func (t *PeerProbeTask) determineProbeFamilies(sess *session.Session) (bool, bool) {
+	mpbgp := slices.Contains(sess.Extensions, "mp-bgp")
+	hasIPv4 := sess.IPv4 != "" || mpbgp
+	hasIPv6 := sess.IPv6 != "" || sess.IPv6LinkLocal != "" || mpbgp
 	return hasIPv4, hasIPv6
 }
 
-type probePacketBuilder func(session BgpSession) ([]byte, error)
+// probePacketBuilder is a function that builds a probe packet for a session
+type probePacketBuilder func(sess *session.Session) ([]byte, error)
 
-func newProbePacketBuilder(ep peerProbeEndpoints) probePacketBuilder {
-	bannerBytes := append([]byte(cfg.PeerProbe.ProbePacketBanner), 0)
+// newProbePacketBuilder creates a probe packet builder function
+func (t *PeerProbeTask) newProbePacketBuilder(ep peerProbeEndpoints) probePacketBuilder {
+	bannerBytes := append([]byte(t.cfg.PeerProbe.ProbePacketBanner), 0)
 	ipv4LE := encodeIPv4LittleEndian(ep.srcIPv4)
 	ipv6LE := encodeIPv6LittleEndian(ep.srcIPv6)
 
-	return func(session BgpSession) ([]byte, error) {
+	return func(sess *session.Session) ([]byte, error) {
 		if peerProbeAEAD == nil {
 			return nil, errors.New("peer probe encryption key is not initialized")
 		}
@@ -307,15 +247,15 @@ func newProbePacketBuilder(ep peerProbeEndpoints) probePacketBuilder {
 		if err := binary.Write(payload, binary.LittleEndian, timestamp); err != nil {
 			return nil, fmt.Errorf("write timestamp: %w", err)
 		}
-		payload.WriteString(cfg.PeerAPI.RouterUUID)
+		payload.WriteString(t.cfg.PeerAPI.RouterUUID)
 		payload.WriteByte(0)
-		payload.WriteString(session.UUID)
+		payload.WriteString(sess.UUID)
 		payload.WriteByte(0)
-		if session.ASN > math.MaxUint32 {
-			return nil, fmt.Errorf("session %s ASN %d exceeds uint32", session.UUID, session.ASN)
+		if sess.ASN > math.MaxUint32 {
+			return nil, fmt.Errorf("session %s ASN %d exceeds uint32", sess.UUID, sess.ASN)
 		}
 		var asnField [4]byte
-		binary.LittleEndian.PutUint32(asnField[:], uint32(session.ASN))
+		binary.LittleEndian.PutUint32(asnField[:], uint32(sess.ASN))
 		payload.Write(asnField[:])
 		payload.Write(ipv4LE[:])
 		payload.Write(ipv6LE[:])
@@ -329,7 +269,6 @@ func newProbePacketBuilder(ep peerProbeEndpoints) probePacketBuilder {
 		encrypted := peerProbeAEAD.Seal(nil, nonce, payload.Bytes(), nil)
 
 		// Construct final packet
-		// length: header + length field + banner + nonceSize(uint32 LE) + nonce + encrypted payload + footer
 		totalLen := 3 + 2 + len(bannerBytes) + 4 + nonceSize + len(encrypted) + 2
 		if totalLen > math.MaxUint16 {
 			return nil, fmt.Errorf("probe packet too large (%d bytes)", totalLen)
@@ -351,6 +290,7 @@ func newProbePacketBuilder(ep peerProbeEndpoints) probePacketBuilder {
 	}
 }
 
+// encodeIPv4LittleEndian encodes an IPv4 address in little-endian format
 func encodeIPv4LittleEndian(ip net.IP) [4]byte {
 	var out [4]byte
 	if ip == nil {
@@ -365,6 +305,7 @@ func encodeIPv4LittleEndian(ip net.IP) [4]byte {
 	return out
 }
 
+// encodeIPv6LittleEndian encodes an IPv6 address in little-endian format
 func encodeIPv6LittleEndian(ip net.IP) [16]byte {
 	var out [16]byte
 	if ip == nil {
@@ -380,22 +321,23 @@ func encodeIPv6LittleEndian(ip net.IP) [16]byte {
 	return out
 }
 
-func dispatchProbes(ctx context.Context, network string, srcIP, dstIP net.IP, port int, iface string, packet []byte) error {
+// dispatchProbes sends multiple probe packets with delay
+func (t *PeerProbeTask) dispatchProbes(ctx context.Context, srcIP, dstIP net.IP, port int, iface string, packet []byte) error {
 	if iface == "" {
 		return errors.New("session interface is required for probe")
 	}
 
-	delay := time.Duration(cfg.PeerProbe.ProbePacketIntervalMs) * time.Millisecond
+	delay := time.Duration(t.cfg.PeerProbe.ProbePacketIntervalMs) * time.Millisecond
 	if delay <= 0 {
 		delay = 100 * time.Millisecond
 	}
 
 	var combined error
-	for i := 0; i < cfg.PeerProbe.ProbePacketCount; i++ {
-		if err := sendSingleProbe(ctx, dstIP, port, srcIP, iface, packet); err != nil {
+	for i := 0; i < t.cfg.PeerProbe.ProbePacketCount; i++ {
+		if err := t.sendSingleProbe(ctx, dstIP, port, srcIP, iface, packet); err != nil {
 			combined = errors.Join(combined, err)
 		}
-		if i+1 < cfg.PeerProbe.ProbePacketCount {
+		if i+1 < t.cfg.PeerProbe.ProbePacketCount {
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
@@ -409,7 +351,8 @@ func dispatchProbes(ctx context.Context, network string, srcIP, dstIP net.IP, po
 	return combined
 }
 
-func sendSingleProbe(ctx context.Context, dstIP net.IP, dstPort int, srcIP net.IP, iface string, payload []byte) error {
+// sendSingleProbe sends a single probe packet
+func (t *PeerProbeTask) sendSingleProbe(ctx context.Context, dstIP net.IP, dstPort int, srcIP net.IP, iface string, payload []byte) error {
 	if dstIP == nil {
 		return errors.New("destination IP missing")
 	}
@@ -469,6 +412,7 @@ func sendSingleProbe(ctx context.Context, dstIP net.IP, dstPort int, srcIP net.I
 	return err
 }
 
+// bindToInterface binds a socket to a specific network interface
 func bindToInterface(fd uintptr, iface string) error {
 	if iface == "" {
 		return nil
@@ -476,6 +420,7 @@ func bindToInterface(fd uintptr, iface string) error {
 	return unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, iface)
 }
 
+// bindIPv6Src binds an IPv6 socket to a specific source address
 func bindIPv6Src(fd uintptr, iface string, src net.IP) error {
 	if src == nil || iface == "" {
 		return nil
@@ -490,6 +435,7 @@ func bindIPv6Src(fd uintptr, iface string, src net.IP) error {
 	return setIPv6PktInfo(fd, &pkt)
 }
 
+// setIPv6PktInfo sets IPv6 packet info on a socket
 func setIPv6PktInfo(fd uintptr, pkt *unix.Inet6Pktinfo) error {
 	if pkt == nil {
 		return nil
@@ -509,12 +455,14 @@ func setIPv6PktInfo(fd uintptr, pkt *unix.Inet6Pktinfo) error {
 	return nil
 }
 
+// deriveAES256Key derives a 32-byte AES key from the input string
 func deriveAES256Key(input string) ([]byte, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
 		return nil, errors.New("empty encryption key")
 	}
 
+	// Try base64 decoding
 	if key, err := decodeBase64Key(trimmed, base64.StdEncoding); err == nil && len(key) == 32 {
 		return key, nil
 	}
@@ -522,24 +470,28 @@ func deriveAES256Key(input string) ([]byte, error) {
 		return key, nil
 	}
 
+	// Try hex decoding
 	if decoded, err := hex.DecodeString(strings.TrimPrefix(trimmed, "0x")); err == nil && len(decoded) == 32 {
 		key := make([]byte, 32)
 		copy(key, decoded)
 		return key, nil
 	}
 
+	// If exactly 32 bytes, use as-is
 	if len(trimmed) == 32 {
 		key := make([]byte, 32)
 		copy(key, []byte(trimmed))
 		return key, nil
 	}
 
+	// Otherwise, hash with SHA256
 	sum := sha256.Sum256([]byte(trimmed))
 	key := make([]byte, 32)
 	copy(key, sum[:])
 	return key, nil
 }
 
+// decodeBase64Key decodes a base64 key
 func decodeBase64Key(input string, enc *base64.Encoding) ([]byte, error) {
 	data, err := enc.DecodeString(input)
 	if err != nil {

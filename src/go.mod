@@ -2,8 +2,6 @@ module github.com/iedon/peerapi-agent
 
 go 1.25.1
 
-replace github.com/iedon/peerapi-agent/bird => ./bird
-
 require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/matishsiao/goInfo v0.0.0-20241216093258-66a9250504d6

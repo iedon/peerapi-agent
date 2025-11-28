@@ -24,41 +24,28 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: 1.25
 
-      - name: Run go get in src
-        working-directory: ./src
-        run: go get
-
-      - name: Build binaries
-        working-directory: ./src
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
+      - name: Build
+        working-directory: ./
+        run: sh ./build.sh
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: ./src/peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
+          name: peerapi-agent
+          path: ./dist/peerapi-agent
 
   release:
     needs: compile
     name: Release to GitHub
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, windows, darwin]
-        goarch: [386, amd64, arm64]
-        exclude:
-          - goarch: 386
-            goos: darwin
-          - goarch: arm64
-            goos: windows
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
+          name: peerapi-agent
+          path: peerapi-agent
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}/peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
+          files: peerapi-agent/peerapi-agent

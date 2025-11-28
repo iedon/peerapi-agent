@@ -1,14 +1,17 @@
-package main
+package httpserver
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/iedon/peerapi-agent/api"
+	"github.com/iedon/peerapi-agent/config"
+	"github.com/iedon/peerapi-agent/logger"
 )
 
-// Middleware for body size limiting
-func bodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
+// BodyLimitMiddleware limits request body size
+func BodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if maxBytes > 0 {
@@ -19,36 +22,36 @@ func bodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-// Middleware for IP validation and trusted proxy handling
-func trustedProxyMiddleware(trustedProxies []string) func(http.Handler) http.Handler {
+// TrustedProxyMiddleware validates IPs and handles trusted proxies
+func TrustedProxyMiddleware(trustedProxies []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Get the real IP address considering trusted proxies
 			clientIP := getRealIP(r, trustedProxies)
 
-			// Enhanced IP validation (EnableIPValidation equivalent)
+			// Enhanced IP validation
 			if clientIP != "" {
 				parsedIP := net.ParseIP(clientIP)
 				if parsedIP == nil {
-					sendJSONResponse(w, http.StatusBadRequest, "Invalid IP address format", nil)
+					SendJSONResponse(w, http.StatusBadRequest, "Invalid IP address format", nil)
 					return
 				}
 
 				// Additional IP validation - reject unspecified IPs
 				if parsedIP.IsUnspecified() {
-					sendJSONResponse(w, http.StatusBadRequest, "Unspecified IP address not allowed", nil)
+					SendJSONResponse(w, http.StatusBadRequest, "Unspecified IP address not allowed", nil)
 					return
 				}
 			}
 
-			// Store the real IP in request context for later use
+			// Store the real IP in request header for later use
 			r.Header.Set("X-Real-IP", clientIP)
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// Get real IP address considering trusted proxies
+// getRealIP gets real IP address considering trusted proxies
 func getRealIP(r *http.Request, trustedProxies []string) string {
 	remoteAddr := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
@@ -74,7 +77,7 @@ func getRealIP(r *http.Request, trustedProxies []string) string {
 	return remoteAddr
 }
 
-// Check if IP is in trusted proxy list
+// isTrustedProxy checks if IP is in trusted proxy list
 func isTrustedProxy(ip string, trustedProxies []string) bool {
 	clientIP := net.ParseIP(ip)
 	if clientIP == nil {
@@ -99,8 +102,8 @@ func isTrustedProxy(ip string, trustedProxies []string) bool {
 	return false
 }
 
-// Middleware for adding server header
-func serverHeaderMiddleware(serverHeader string) func(http.Handler) http.Handler {
+// ServerHeaderMiddleware adds server header
+func ServerHeaderMiddleware(serverHeader string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Server", serverHeader)
@@ -109,8 +112,8 @@ func serverHeaderMiddleware(serverHeader string) func(http.Handler) http.Handler
 	}
 }
 
-// Debug logging middleware
-func debugLoggingMiddleware(debug bool) func(http.Handler) http.Handler {
+// DebugLoggingMiddleware logs requests in debug mode
+func DebugLoggingMiddleware(log *logger.Logger, debug bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if debug {
@@ -118,9 +121,22 @@ func debugLoggingMiddleware(debug bool) func(http.Handler) http.Handler {
 				if clientIP == "" {
 					clientIP = r.RemoteAddr
 				}
-				fmt.Printf("[DEBUG] %s %s %s from %s\n", r.Method, r.URL.Path, r.Proto, clientIP)
+				log.Debug("%s %s %s from %s", r.Method, r.URL.Path, r.Proto, clientIP)
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// AuthMiddleware wraps handlers with bearer token authentication
+func AuthMiddleware(cfg *config.Config) func(http.HandlerFunc) http.HandlerFunc {
+	return func(handler http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !api.VerifyBearerToken(r, cfg) {
+				SendJSONResponse(w, http.StatusUnauthorized, "Unauthorized", nil)
+				return
+			}
+			handler(w, r)
+		}
 	}
 }

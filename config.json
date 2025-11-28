@@ -24,7 +24,8 @@
     "maxBackups": 10,
     "maxAge": 30,
     "compress": true,
-    "consoleLogging": true
+    "consoleLogging": true,
+    "level": "info"
   },
 
   "peerApiCenter": {

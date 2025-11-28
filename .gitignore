@@ -8,3 +8,4 @@ src/go.sum
 GeoLite2-Country.mmdb
 logs/*
 dist/*
+build/*
